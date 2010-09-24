@@ -40,6 +40,7 @@ static Symbol DEREF = Symbol.create("clojure.core", "deref");
 //static Symbol DEREF_BANG = Symbol.create("clojure.core", "deref!");
 
 static IFn[] macros = new IFn[256];
+static IFn tripleDquoteStringReader;
 static IFn[] dispatchMacros = new IFn[256];
 //static Pattern symbolPat = Pattern.compile("[:]?([\\D&&[^:/]][^:/]*/)?[\\D&&[^:/]][^:/]*");
 static Pattern symbolPat = Pattern.compile("[:]?([\\D&&[^/]].*/)?([\\D&&[^/]][^/]*)");
@@ -81,7 +82,7 @@ static Var ARG_ENV = Var.create(null);
 	macros['\\'] = new CharacterReader();
 	macros['%'] = new ArgReader();
 	macros['#'] = new DispatchReader();
-
+	tripleDquoteStringReader = new TripleDquoteStringReader();
 
 	dispatchMacros['^'] = new MetaReader();
 	dispatchMacros['\''] = new VarReader();
@@ -412,7 +413,22 @@ public static class StringReader extends AFn{
 		StringBuilder sb = new StringBuilder();
 		Reader r = (Reader) reader;
 
-		for(int ch = r.read(); ch != '"'; ch = r.read())
+		int ch = r.read();
+		if(ch == '"')
+		    {
+		    int ch2 = r.read();
+		    if(ch2 == '"')
+			{
+		        return tripleDquoteStringReader.invoke(r, '"');
+			}
+		    else
+			{
+			unread((PushbackReader)r, ch2);
+			return "";
+			}
+		    }
+		
+		for(; ch != '"'; ch = r.read())
 			{
 			if(ch == -1)
 				throw new Exception("EOF while reading string");
@@ -466,6 +482,94 @@ public static class StringReader extends AFn{
 			sb.append((char) ch);
 			}
 		return sb.toString();
+	}
+}
+
+public static class TripleDquoteStringReader extends AFn{
+	public Object invoke(Object reader, Object doublequote) throws Exception{
+		StringBuilder sb = new StringBuilder();
+		Reader r = (Reader) reader;
+
+		for(int ch = r.read(); ; ch = r.read())
+		    {
+		    switch(ch)
+			{
+			case -1:
+			    throw new Exception("EOF while reading string");
+			case '"':
+			    int ch2 = r.read();
+			    switch(ch2)
+				{
+				case -1:
+				    throw new Exception("EOF while reading string");
+				case '"':
+				    int ch3 = r.read();
+				    switch(ch3)
+					{
+					case -1:
+					    throw new Exception("EOF while reading string");
+					case '"':
+					    return sb.toString();
+					default:
+					    sb.append((char) ch);
+					    sb.append((char) ch2);
+					    sb.append((char) ch3);
+					}
+				    break;
+				default:
+				    sb.append((char) ch);
+				    sb.append((char) ch2);
+				}
+			    break;
+			case '\\':
+			    ch = r.read();
+			    if(ch == -1)
+				throw new Exception("EOF while reading string");
+			    switch(ch)
+				{
+				case 't':
+				    ch = '\t';
+				    break;
+				case 'r':
+				    ch = '\r';
+				    break;
+				case 'n':
+				    ch = '\n';
+				    break;
+				case '\\':
+				    break;
+				case '"':
+				    break;
+				case 'b':
+				    ch = '\b';
+				    break;
+				case 'f':
+				    ch = '\f';
+				    break;
+				case 'u':
+				    {
+				    ch = r.read();
+				    if (Character.digit(ch, 16) == -1)
+					throw new Exception("Invalid unicode escape: \\u" + (char) ch);
+				    ch = readUnicodeChar((PushbackReader) r, ch, 16, 4, true);
+				    break;
+				    }
+				default:
+				    if(Character.isDigit(ch))
+					{
+					    ch = readUnicodeChar((PushbackReader) r, ch, 8, 3, false);
+					    if(ch > 0377)
+						throw new Exception("Octal escape sequence must be in range [0, 377].");
+					}
+				    else
+					throw new Exception("Unsupported escape character: \\" + (char) ch);
+				}
+			    sb.append((char) ch);
+			    break;
+			default:
+			    sb.append((char) ch);
+			}
+		    }
 	}
 }
 
